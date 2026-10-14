@@ -218,13 +218,24 @@ def publish_folder(token: str, folder: str, name: str | None = None,
     html_url = repo["html_url"]
     clone_url = f"https://github.com/{login}/{name}.git"
 
-    # init + commit
+    # init
     if not os.path.isdir(os.path.join(folder, ".git")):
         _run(["git", "init"], folder); log.append("git init")
-    _run(["git", "symbolic-ref", "HEAD", "refs/heads/main"], folder)
+    # ensure a committer identity exists (fresh git installs have none -> commit fails)
+    ce, email = _run(["git", "config", "user.email"], folder)
+    if ce != 0 or not email.strip():
+        _run(["git", "config", "user.email", f"{login}@users.noreply.github.com"], folder)
+        _run(["git", "config", "user.name", login], folder)
+        log.append("set local git identity")
+    # make sure we're on a 'main' branch
+    _run(["git", "checkout", "-B", "main"], folder)
     _run(["git", "add", "-A"], folder)
     code, out = _run(["git", "commit", "-m", commit_msg], folder)
-    log.append("commit: " + (out.splitlines()[0] if out else "nothing to commit"))
+    # verify a commit actually exists (nothing to push otherwise)
+    hc, _h = _run(["git", "rev-parse", "HEAD"], folder)
+    if hc != 0:
+        return {"ok": False, "error": "commit failed (no commit created): " + out, "html_url": html_url, "log": log}
+    log.append("commit: " + (out.splitlines()[0] if out else "ok"))
 
     # remote (clean URL, no token stored)
     _run(["git", "remote", "remove", "origin"], folder)
