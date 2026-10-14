@@ -6,13 +6,14 @@ Your GitHub token stays on this machine (0600 file) and is never sent anywhere
 except api.github.com.
 """
 from __future__ import annotations
-import html, http.client, json, os, socket, threading, time, webbrowser
+import html, http.client, json, os, socket, sys, threading, time, webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import urlparse, parse_qs
 
 import ghcore as C
 
-BASE = os.path.dirname(os.path.abspath(__file__))
+# When frozen by PyInstaller, bundled data (templates/) lives under _MEIPASS.
+BASE = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
 PROJECTS_ROOT = os.path.expanduser(os.environ.get("PROJECTS_ROOT", "~/Documents/Projects_Folder"))
 
 
@@ -81,6 +82,9 @@ class H(BaseHTTPRequestHandler):
         elif path == "/api/make_public_all":
             t = C.get_token()
             self._json({"results": C.make_all_public(t)})
+        elif path == "/api/ignore":
+            lst = C.set_ignored(b["path"], bool(b.get("ignore", True)))
+            self._json({"ok": True, "ignored": lst})
         else:
             self._json({"error": "not found"}, 404)
 

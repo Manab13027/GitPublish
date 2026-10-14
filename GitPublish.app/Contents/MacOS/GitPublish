@@ -1,0 +1,24 @@
+#!/bin/bash
+# GitPublish.app launcher — starts the local server and opens the browser.
+# It finds the GitPublish code folder, so the .app can live in /Applications
+# while the code stays in your Projects folder (and keeps getting updates).
+
+CANDIDATES=(
+  "$(cd "$(dirname "$0")/../.." 2>/dev/null && dirname "$(pwd)")"   # folder containing the .app
+  "$HOME/Documents/Projects_Folder/GitPublish"
+  "$HOME/Documents/GitPublish"
+)
+CODE=""
+for c in "${CANDIDATES[@]}"; do
+  if [ -f "$c/app.py" ]; then CODE="$c"; break; fi
+done
+
+if [ -z "$CODE" ]; then
+  osascript -e 'display dialog "Could not find the GitPublish code folder (app.py). Keep GitPublish.app next to it, or put the project at ~/Documents/Projects_Folder/GitPublish." buttons {"OK"} with icon stop' 2>/dev/null
+  exit 1
+fi
+
+cd "$CODE" || exit 1
+pkill -9 -f "$CODE/app.py" 2>/dev/null      # stop a previous instance
+PY="$(command -v python3 || echo /usr/bin/python3)"
+exec "$PY" app.py

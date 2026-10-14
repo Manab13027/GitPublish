@@ -20,6 +20,7 @@ import urllib.error
 API = "https://api.github.com"
 CONFIG_DIR = os.path.expanduser("~/.config/gitpublish")
 TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
+IGNORE_FILE = os.path.join(CONFIG_DIR, "ignored.json")
 GH_MAX_BYTES = 95 * 1024 * 1024  # GitHub hard-rejects files >100MB; stay under
 
 DEFAULT_GITIGNORE = """\
@@ -28,6 +29,7 @@ __pycache__/
 *.py[cod]
 .venv/
 venv/
+.build-venv/
 .env
 node_modules/
 dist/
@@ -75,6 +77,60 @@ def save_token(tok: str) -> None:
         os.chmod(TOKEN_FILE, 0o600)
     except Exception:
         pass
+
+
+# -------------------------------------------------------------- ignore list
+def load_ignored() -> list[str]:
+    try:
+        return list(json.load(open(IGNORE_FILE)))
+    except Exception:
+        return []
+
+
+def set_ignored(path: str, ignore: bool) -> list[str]:
+    path = os.path.abspath(os.path.expanduser(path))
+    cur = set(load_ignored())
+    if ignore:
+        cur.add(path)
+    else:
+        cur.discard(path)
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    json.dump(sorted(cur), open(IGNORE_FILE, "w"), indent=1)
+    return sorted(cur)
+
+
+# -------------------------------------------------------------- project kind
+def detect_kind(folder: str) -> str:
+    try:
+        names = set(os.listdir(folder))
+    except OSError:
+        return "Other"
+
+    def has(*f):
+        return any(x in names for x in f)
+
+    def ext(*e):
+        return any(n.lower().endswith(e) for n in names)
+
+    if has("package.json"):
+        return "Node / JS"
+    if has("requirements.txt", "setup.py", "pyproject.toml", "Pipfile") or ext(".py"):
+        return "Python"
+    if has("Cargo.toml"):
+        return "Rust"
+    if has("go.mod"):
+        return "Go"
+    if has("pom.xml", "build.gradle") or ext(".java"):
+        return "Java"
+    if has("index.html") or ext(".html"):
+        return "Web"
+    if has("Dockerfile", "docker-compose.yml"):
+        return "Docker"
+    if ext(".sh"):
+        return "Shell"
+    if ext(".ipynb"):
+        return "Notebook"
+    return "Other"
 
 
 # -------------------------------------------------------------- API
@@ -265,6 +321,7 @@ def scan_projects(root: str) -> list[dict]:
     out = []
     if not os.path.isdir(root):
         return out
+    ignored_set = set(load_ignored())
     for entry in sorted(os.listdir(root)):
         p = os.path.join(root, entry)
         if not os.path.isdir(p) or entry.startswith("."):
@@ -309,5 +366,6 @@ def scan_projects(root: str) -> list[dict]:
             state = "new"
         out.append({"name": entry, "path": p, "is_git": is_git, "has_remote": has_remote,
                     "dirty": dirty, "ahead": ahead, "published": published, "state": state,
-                    "changed_at": changed_at, "changed_count": changed_count})
+                    "changed_at": changed_at, "changed_count": changed_count,
+                    "ignored": p in ignored_set, "kind": detect_kind(p)})
     return out

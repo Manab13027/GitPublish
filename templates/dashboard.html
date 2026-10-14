@@ -39,6 +39,31 @@
   .muted{color:var(--dim);font-size:12px}
   a{color:var(--blue);text-decoration:none} a:hover{text-decoration:underline}
   label.chk{font-size:12px;color:var(--dim);display:inline-flex;align-items:center;gap:5px;cursor:pointer}
+  /* analytics */
+  .tiles{display:grid;grid-template-columns:repeat(auto-fit,minmax(120px,1fr));gap:12px;margin-bottom:16px}
+  .tile{background:#0d1117;border:1px solid var(--line);border-radius:9px;padding:14px 12px;text-align:center}
+  .tile .n{font-size:28px;font-weight:700} .tile .l{font-size:11px;color:var(--dim);letter-spacing:.5px;margin-top:2px}
+  .charts{display:grid;grid-template-columns:1fr;gap:18px}
+  @media(min-width:720px){.charts{grid-template-columns:1fr 1fr}}
+  .chartbox{display:flex;align-items:center;gap:18px}
+  .donut{width:130px;height:130px;border-radius:50%;position:relative;flex:none}
+  .donut .hole{position:absolute;inset:26px;background:var(--panel);border-radius:50%;display:flex;flex-direction:column;align-items:center;justify-content:center}
+  .donut .hole .big{font-size:22px;font-weight:700} .donut .hole .sm{font-size:10px;color:var(--dim)}
+  .legend2{font-size:13px;line-height:1.9}
+  .legend2 .sw{display:inline-block;width:11px;height:11px;border-radius:3px;margin-right:8px;vertical-align:middle}
+  .legend2 .ct{color:var(--dim);margin-left:6px}
+  .chart-title{font-size:12px;color:var(--dim);letter-spacing:.5px;margin-bottom:10px}
+  /* table */
+  table.repos{width:100%;border-collapse:collapse}
+  table.repos th{text-align:left;font-size:11px;letter-spacing:.5px;color:var(--dim);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.repos td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
+  table.repos td.date{color:var(--dim);font-size:12px;white-space:nowrap}
+  .bars2{display:flex;flex-direction:column;gap:7px;width:100%}
+  .bars2 .b{display:flex;align-items:center;gap:8px;font-size:12px}
+  .bars2 .b .lab{width:78px;color:var(--dim);text-align:right}
+  .bars2 .b .track{flex:1;background:#0d1117;border-radius:4px;height:16px;overflow:hidden}
+  .bars2 .b .fill{height:100%;border-radius:4px}
+  .bars2 .b .v{width:26px}
   #log{font-family:var(--mono);font-size:12px;color:var(--dim);background:#0d1117;border:1px solid var(--line);
     border-radius:8px;padding:10px;max-height:200px;overflow:auto;white-space:pre-wrap}
   .hide{display:none}
@@ -66,6 +91,16 @@
       <button class="btn" id="connectBtn">Connect</button>
     </div>
     <div class="muted" id="connectMsg" style="margin-top:8px"></div>
+  </div>
+
+  <!-- analytics -->
+  <div class="card hide" id="analysisCard">
+    <h2>Overview</h2>
+    <div class="tiles" id="tiles"></div>
+    <div class="charts">
+      <div><div class="chart-title">GITHUB REPOSITORIES BY VISIBILITY</div><div class="chartbox" id="visChart"></div></div>
+      <div><div class="chart-title">PUBLISHED PROJECTS BY TYPE</div><div class="chartbox" id="kindChart"></div></div>
+    </div>
   </div>
 
   <!-- projects -->
@@ -101,6 +136,7 @@ async function refreshStatus(){
   if(s.user){
     $('#status').innerHTML=`connected as <b>${esc(s.user)}</b>`;
     $('#connectCard').classList.add('hide');
+    $('#analysisCard').classList.remove('hide');
     $('#projCard').classList.remove('hide');$('#repoCard').classList.remove('hide');
     loadProjects();loadRepos();
   }else{
@@ -127,38 +163,51 @@ $('#connectBtn').onclick=async()=>{
   else $('#connectMsg').innerHTML=`<span style="color:var(--red)">${esc(r.error)}</span>`;
 };
 
-let SHOW_PUBLISHED=false;
+let SHOW_PUBLISHED=false, SHOW_IGNORED=false, LAST_PROJECTS=[], LAST_REPOS=[];
 async function loadProjects(){
   const root=$('#rootInput').value.trim();
   const d=await jget('/api/projects?root='+encodeURIComponent(root));
+  LAST_PROJECTS=d.projects||[]; maybeAnalysis();
   const el=$('#projects');
   if(!d.projects.length){el.innerHTML=`<div class="muted">No folders found in ${esc(d.root)}</div>`;return;}
-  const published=d.projects.filter(p=>p.published);
-  const visible=d.projects.filter(p=>SHOW_PUBLISHED||!p.published);
+  const ignored=d.projects.filter(p=>p.ignored);
+  const published=d.projects.filter(p=>!p.ignored&&p.published);
+  const visible=d.projects.filter(p=>(SHOW_IGNORED?p.ignored:(!p.ignored&&(SHOW_PUBLISHED||!p.published))));
   const rows=visible.map(p=>{
     let badge, info=esc(p.path);
-    if(p.state==='published'){ badge='<span class="badge b-pub">published</span>'; }
+    const kindTag=`<span class="badge b-git">${esc(p.kind)}</span>`;
+    if(p.ignored){ badge='<span class="badge b-none">ignored</span>'; }
+    else if(p.state==='published'){ badge='<span class="badge b-pub">published</span>'; }
     else if(p.state==='changed'){
       badge='<span class="badge b-chg">changes to push</span>';
       const when=p.changed_at?fmtWhen(p.changed_at):'';
       const n=p.changed_count?`${p.changed_count} ${p.dirty?'changed file'+(p.changed_count>1?'s':''):'unpushed commit'+(p.changed_count>1?'s':'')}`:'changes';
       info=`<span style="color:var(--yellow)">● ${n}${when?' · last change '+when:''}</span>`;
-    } else { badge=p.is_git?'<span class="badge b-git">git</span>':'<span class="badge b-none">not published</span>'; }
+    } else { badge='<span class="badge b-none">not published</span>'; }
     const label=p.state==='changed'?'Push changes':(p.published?'Re-publish':'Publish');
-    const btnClass=p.state==='changed'?'btn sm':'btn sm';
+    const actions = p.ignored
+      ? `<button class="btn ghost sm" onclick="setIgnore('${esc(p.path)}',false)">Un-ignore</button>`
+      : `<label class="chk"><input type="checkbox" class="privchk" data-p="${esc(p.path)}"> private</label>
+         <button class="btn sm" onclick="publish(this,'${esc(p.path)}','${esc(p.name)}')">${label}</button>
+         <button class="btn ghost sm" title="Never show this folder" onclick="setIgnore('${esc(p.path)}',true)">✕ Ignore</button>`;
     return `<div class="row">
-      <div><b>${esc(p.name)}</b> ${badge}<div class="meta">${info}</div></div>
-      <div class="toolbar">
-        <label class="chk"><input type="checkbox" class="privchk" data-p="${esc(p.path)}"> private</label>
-        <button class="${btnClass}" onclick="publish(this,'${esc(p.path)}','${esc(p.name)}')">${label}</button>
-      </div></div>`;}).join('');
+      <div><b>${esc(p.name)}</b> ${kindTag} ${badge}<div class="meta">${info}</div></div>
+      <div class="toolbar">${actions}</div></div>`;}).join('');
   let footer='';
-  if(published.length){
-    footer=`<div class="muted" style="padding:10px 8px">${published.length} already-published folder(s) hidden until you make changes ·
-      <a href="#" id="toggledone">${SHOW_PUBLISHED?'hide them':'show them'}</a></div>`;
-  }
-  el.innerHTML=(rows||'<div class="muted" style="padding:10px 8px">Nothing to publish — everything here is up to date.</div>')+footer;
-  const tg=$('#toggledone'); if(tg) tg.onclick=(e)=>{e.preventDefault();SHOW_PUBLISHED=!SHOW_PUBLISHED;loadProjects();};
+  if(!SHOW_IGNORED && published.length)
+    footer+=`<div class="muted" style="padding:8px">${published.length} already-published folder(s) hidden ·
+      <a href="#" id="togdone">${SHOW_PUBLISHED?'hide':'show'}</a></div>`;
+  if(ignored.length)
+    footer+=`<div class="muted" style="padding:8px">${ignored.length} ignored folder(s) ·
+      <a href="#" id="togign">${SHOW_IGNORED?'back to projects':'manage ignored'}</a></div>`;
+  el.innerHTML=(rows||'<div class="muted" style="padding:10px 8px">'+(SHOW_IGNORED?'No ignored folders.':'Nothing to publish — everything here is up to date.')+'</div>')+footer;
+  const a=$('#togdone'); if(a)a.onclick=e=>{e.preventDefault();SHOW_PUBLISHED=!SHOW_PUBLISHED;loadProjects();};
+  const b=$('#togign'); if(b)b.onclick=e=>{e.preventDefault();SHOW_IGNORED=!SHOW_IGNORED;loadProjects();};
+}
+async function setIgnore(path,ignore){
+  await jpost('/api/ignore',{path,ignore});
+  log((ignore?'✕ ignoring ':'↩ un-ignoring ')+path);
+  loadProjects();
 }
 $('#rescan').onclick=loadProjects;
 
@@ -174,14 +223,21 @@ async function publish(btn,path,name){
 
 async function loadRepos(){
   const d=await jget('/api/repos');const el=$('#repos');
+  LAST_REPOS=d.repos||[]; maybeAnalysis();
   if(!d.repos.length){el.innerHTML='<div class="muted">No repositories yet.</div>';return;}
-  el.innerHTML=d.repos.map(r=>{
+  const rows=d.repos.map(r=>{
     const badge=r.private?'<span class="badge b-priv">private</span>':'<span class="badge b-pub">public</span>';
-    const act=r.private?`<button class="btn warn sm" onclick="makePublic(this,'${esc(r.name)}')">Make public</button>`:'';
-    const up=fmtDate(r.created_at), last=fmtDate(r.pushed_at);
-    const dates=`<div class="meta">uploaded ${up}${last&&last!==up?' · last push '+last:''}</div>`;
-    return `<div class="row"><div><a href="${esc(r.html_url)}" target="_blank"><b>${esc(r.name)}</b></a> ${badge}${dates}</div>
-      <div>${act}</div></div>`;}).join('');
+    const act=r.private?`<button class="btn warn sm" onclick="makePublic(this,'${esc(r.name)}')">Make public</button>`
+                        :`<a class="btn ghost sm" href="${esc(r.html_url)}" target="_blank">Open</a>`;
+    return `<tr>
+      <td><a href="${esc(r.html_url)}" target="_blank"><b>${esc(r.name)}</b></a></td>
+      <td>${badge}</td>
+      <td class="date">${fmtDate(r.created_at)||'—'}</td>
+      <td class="date">${fmtDate(r.pushed_at)||'—'}</td>
+      <td style="text-align:right">${act}</td></tr>`;}).join('');
+  el.innerHTML=`<table class="repos"><thead><tr>
+      <th>Repository</th><th>Visibility</th><th>Uploaded</th><th>Last push</th><th></th>
+    </tr></thead><tbody>${rows}</tbody></table>`;
 }
 async function makePublic(btn,name){
   btn.disabled=true;btn.textContent='…';
@@ -197,6 +253,50 @@ $('#allPublic').onclick=async()=>{
   if(!d.results||!d.results.length)log('   (no private repos)');
   loadRepos();
 };
+
+/* ---------- analytics ---------- */
+const PALETTE=['#58a6ff','#3fb950','#d29922','#a371f7','#ff7b72','#79c0ff','#56d364','#e3b341','#ff9bce','#8b949e'];
+function donutHTML(data,centerBig,centerSm){
+  const total=data.reduce((s,d)=>s+d.value,0)||1;
+  let acc=0, segs=[];
+  data.forEach(d=>{const start=acc/total*360, end=(acc+d.value)/total*360; acc+=d.value;
+    segs.push(`${d.color} ${start}deg ${end}deg`);});
+  const legend=data.map(d=>`<div><span class="sw" style="background:${d.color}"></span>${esc(d.label)}<span class="ct">${d.value}</span></div>`).join('');
+  return `<div class="donut" style="background:conic-gradient(${segs.join(',')})">
+      <div class="hole"><div class="big">${centerBig}</div><div class="sm">${esc(centerSm)}</div></div></div>
+    <div class="legend2">${legend}</div>`;
+}
+function barsHTML(data){
+  const max=Math.max(1,...data.map(d=>d.value));
+  return `<div class="bars2">`+data.map(d=>
+    `<div class="b"><span class="lab">${esc(d.label)}</span>
+      <span class="track"><span class="fill" style="width:${Math.round(d.value/max*100)}%;background:${d.color}"></span></span>
+      <span class="v">${d.value}</span></div>`).join('')+`</div>`;
+}
+function maybeAnalysis(){
+  if(!LAST_REPOS && !LAST_PROJECTS) return;
+  const repos=LAST_REPOS||[], projects=LAST_PROJECTS||[];
+  const pub=repos.filter(r=>!r.private).length, priv=repos.length-pub;
+  const publishedProj=projects.filter(p=>p.published && !p.ignored);
+  // tiles
+  $('#tiles').innerHTML=[
+    ['n',repos.length,'Repositories','var(--ink)'],
+    ['n',pub,'Public','var(--green)'],
+    ['n',priv,'Private','var(--yellow)'],
+    ['n',publishedProj.length,'Published here','var(--blue)'],
+  ].map(t=>`<div class="tile"><div class="n" style="color:${t[3]}">${t[1]}</div><div class="l">${t[2]}</div></div>`).join('');
+  // visibility donut
+  $('#visChart').innerHTML = repos.length
+    ? donutHTML([{label:'Public',value:pub,color:'#3fb950'},{label:'Private',value:priv,color:'#d29922'}], repos.length, 'repos')
+    : '<div class="muted">No repositories yet.</div>';
+  // kind bars (published projects by type)
+  const kinds={};
+  publishedProj.forEach(p=>{kinds[p.kind]=(kinds[p.kind]||0)+1;});
+  const kindData=Object.entries(kinds).sort((a,b)=>b[1]-a[1]).map((e,i)=>({label:e[0],value:e[1],color:PALETTE[i%PALETTE.length]}));
+  $('#kindChart').innerHTML = kindData.length
+    ? barsHTML(kindData)
+    : '<div class="muted">Publish a project to see its type here.</div>';
+}
 
 refreshStatus();
 </script>
