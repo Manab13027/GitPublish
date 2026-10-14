@@ -49,7 +49,8 @@ class H(BaseHTTPRequestHandler):
             self._send(200, render(), "text/html; charset=utf-8")
         elif path == "/api/status":
             t = C.get_token()
-            self._json({"token": bool(t), "user": C.whoami(t) if t else None})
+            self._json({"token": bool(t), "user": C.whoami(t) if t else None,
+                        "author": C.get_author()})
         elif path == "/api/repos":
             t = C.get_token()
             self._json({"repos": C.list_repos(t) if t else [], "user": C.whoami(t) if t else None})
@@ -79,12 +80,43 @@ class H(BaseHTTPRequestHandler):
             t = C.get_token(); login = C.whoami(t)
             ok, j = C.set_visibility(t, login, b["name"], False)
             self._json({"ok": ok, "error": None if ok else j.get("message")})
+        elif path == "/api/tag_release":
+            t = C.get_token(); login = C.whoami(t)
+            self._json(C.create_tag(t, login, b["name"], b.get("tag", "v1.0.0")))
+        elif path == "/api/delete_repo":
+            t = C.get_token(); login = C.whoami(t)
+            self._json(C.delete_repo(t, login, b["name"]))
         elif path == "/api/make_public_all":
             t = C.get_token()
             self._json({"results": C.make_all_public(t)})
         elif path == "/api/ignore":
             lst = C.set_ignored(b["path"], bool(b.get("ignore", True)))
             self._json({"ok": True, "ignored": lst})
+        elif path == "/api/author":
+            self._json({"ok": True, "author": C.save_author(b.get("name", ""))})
+        elif path == "/api/gen_readme":
+            self._json(C.gen_readme(b["path"], bool(b.get("force"))))
+        elif path == "/api/gen_license":
+            self._json(C.gen_license(b["path"], C.get_author(), bool(b.get("force"))))
+        elif path == "/api/add_release":
+            self._json(C.add_release_workflow(b["path"], b.get("app", ""), b.get("entry", "")))
+        elif path == "/api/gen_all":
+            # bulk: readme and/or license for every non-ignored project missing them
+            root = b.get("root", PROJECTS_ROOT)
+            do_readme = bool(b.get("readme")); do_license = bool(b.get("license"))
+            author = C.get_author()
+            res = []
+            for proj in C.scan_projects(root):
+                if proj["ignored"]:
+                    continue
+                r = {"name": proj["name"]}
+                if do_readme and not proj["has_readme"]:
+                    r["readme"] = C.gen_readme(proj["path"]).get("ok", False)
+                if do_license and not proj["has_license"]:
+                    r["license"] = C.gen_license(proj["path"], author).get("ok", False)
+                if len(r) > 1:
+                    res.append(r)
+            self._json({"ok": True, "results": res})
         else:
             self._json({"error": "not found"}, 404)
 

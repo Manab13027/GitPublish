@@ -109,6 +109,14 @@
       <span class="toolbar"><input type="text" id="rootInput" value="__ROOT__" style="width:340px">
       <button class="btn ghost sm" id="rescan">Rescan</button></span>
     </h2>
+    <div class="toolbar" style="margin:-4px 0 12px;gap:8px;flex-wrap:wrap">
+      <span class="muted">Your name (for licenses):</span>
+      <input type="text" id="authorInput" placeholder="e.g. Manab Sharma" style="width:200px">
+      <button class="btn ghost sm" id="saveAuthor">Save</button>
+      <span style="flex:1"></span>
+      <button class="btn ghost sm" id="bulkReadme">+ READMEs (missing)</button>
+      <button class="btn ghost sm" id="bulkLicense">+ Apache-2.0 (all)</button>
+    </div>
     <div id="projects"><div class="muted">Loading…</div></div>
   </div>
 
@@ -138,6 +146,7 @@ async function refreshStatus(){
     $('#connectCard').classList.add('hide');
     $('#analysisCard').classList.remove('hide');
     $('#projCard').classList.remove('hide');$('#repoCard').classList.remove('hide');
+    AUTHOR=s.author||''; if(AUTHOR)$('#authorInput').value=AUTHOR;
     loadProjects();loadRepos();
   }else{
     $('#status').textContent='not connected';
@@ -185,13 +194,21 @@ async function loadProjects(){
       info=`<span style="color:var(--yellow)">● ${n}${when?' · last change '+when:''}</span>`;
     } else { badge='<span class="badge b-none">not published</span>'; }
     const label=p.state==='changed'?'Push changes':(p.published?'Re-publish':'Publish');
+    // small "add file" chips — only shown when that file is missing
+    const addbtns = p.ignored ? '' : [
+      !p.has_readme ? `<button class="btn ghost sm" title="Generate a README" onclick="genReadme('${esc(p.path)}')">+ README</button>` : '',
+      !p.has_license ? `<button class="btn ghost sm" title="Add Apache-2.0 license (your name)" onclick="genLicense('${esc(p.path)}')">+ License</button>` : '',
+      !p.has_release ? `<button class="btn ghost sm" title="Add build-release workflow (installers)" onclick="addRelease('${esc(p.path)}','${esc(p.name)}')">+ Release</button>` : '',
+    ].join('');
+    const marks = [p.has_readme?'📄':'', p.has_license?'⚖️':'', p.has_release?'⚙️':''].join('');
     const actions = p.ignored
       ? `<button class="btn ghost sm" onclick="setIgnore('${esc(p.path)}',false)">Un-ignore</button>`
-      : `<label class="chk"><input type="checkbox" class="privchk" data-p="${esc(p.path)}"> private</label>
+      : `${addbtns}
+         <label class="chk"><input type="checkbox" class="privchk" data-p="${esc(p.path)}"> private</label>
          <button class="btn sm" onclick="publish(this,'${esc(p.path)}','${esc(p.name)}')">${label}</button>
-         <button class="btn ghost sm" title="Never show this folder" onclick="setIgnore('${esc(p.path)}',true)">✕ Ignore</button>`;
+         <button class="btn ghost sm" title="Never show this folder" onclick="setIgnore('${esc(p.path)}',true)">✕</button>`;
     return `<div class="row">
-      <div><b>${esc(p.name)}</b> ${kindTag} ${badge}<div class="meta">${info}</div></div>
+      <div><b>${esc(p.name)}</b> ${kindTag} ${badge} <span title="README / License / Release present">${marks}</span><div class="meta">${info}</div></div>
       <div class="toolbar">${actions}</div></div>`;}).join('');
   let footer='';
   if(!SHOW_IGNORED && published.length)
@@ -211,6 +228,47 @@ async function setIgnore(path,ignore){
 }
 $('#rescan').onclick=loadProjects;
 
+/* ---- author + per-folder generators ---- */
+let AUTHOR='';
+async function ensureAuthor(){
+  if(AUTHOR)return AUTHOR;
+  const n=(prompt('Enter your name for the copyright line (saved for next time):','')||'').trim();
+  if(!n)return '';
+  const r=await jpost('/api/author',{name:n}); AUTHOR=r.author; $('#authorInput').value=AUTHOR; return AUTHOR;
+}
+$('#saveAuthor').onclick=async()=>{const n=$('#authorInput').value.trim();if(!n)return;
+  const r=await jpost('/api/author',{name:n});AUTHOR=r.author;log('saved author: '+AUTHOR);};
+
+async function genReadme(path){
+  const r=await jpost('/api/gen_readme',{path});
+  log(r.ok?('📄 README written → '+path):('README: '+r.error)); loadProjects();
+}
+async function genLicense(path){
+  if(!(await ensureAuthor())){log('license: set your name first');return;}
+  const r=await jpost('/api/gen_license',{path});
+  log(r.ok?('⚖️ Apache-2.0 LICENSE (©'+AUTHOR+') → '+path):('license: '+r.error)); loadProjects();
+}
+async function addRelease(path,name){
+  const r=await jpost('/api/add_release',{path});
+  log(r.ok?('⚙️ release workflow added → '+name+' (entry: '+r.entry+')'):('release: '+r.error)); loadProjects();
+}
+$('#bulkReadme').onclick=async()=>{
+  const root=$('#rootInput').value.trim();
+  log('→ generating READMEs for projects missing one…');
+  const d=await jpost('/api/gen_all',{root,readme:true});
+  (d.results||[]).forEach(r=>{if('readme' in r)log((r.readme?'📄 ':'· ')+r.name);});
+  log('done.'); loadProjects();
+};
+$('#bulkLicense').onclick=async()=>{
+  if(!(await ensureAuthor())){log('set your name first');return;}
+  if(!confirm('Add an Apache-2.0 LICENSE (© '+AUTHOR+') to every project that lacks one?'))return;
+  const root=$('#rootInput').value.trim();
+  log('→ adding Apache-2.0 license to projects missing one…');
+  const d=await jpost('/api/gen_all',{root,license:true});
+  (d.results||[]).forEach(r=>{if('license' in r)log((r.license?'⚖️ ':'· ')+r.name);});
+  log('done — your name is now in each LICENSE.'); loadProjects();
+};
+
 async function publish(btn,path,name){
   const priv=document.querySelector(`.privchk[data-p="${CSS.escape(path)}"]`).checked;
   btn.disabled=true;btn.textContent='Publishing…';
@@ -227,8 +285,11 @@ async function loadRepos(){
   if(!d.repos.length){el.innerHTML='<div class="muted">No repositories yet.</div>';return;}
   const rows=d.repos.map(r=>{
     const badge=r.private?'<span class="badge b-priv">private</span>':'<span class="badge b-pub">public</span>';
-    const act=r.private?`<button class="btn warn sm" onclick="makePublic(this,'${esc(r.name)}')">Make public</button>`
+    const base=r.private?`<button class="btn warn sm" onclick="makePublic(this,'${esc(r.name)}')">Make public</button>`
                         :`<a class="btn ghost sm" href="${esc(r.html_url)}" target="_blank">Open</a>`;
+    const relLink=`<a class="btn ghost sm" href="${esc(r.html_url)}/releases" target="_blank" title="View releases & downloads">Releases</a>`;
+    const delBtn=`<button class="btn ghost sm" style="color:var(--red);border-color:var(--red)" title="Delete this repo permanently" onclick="deleteRepo('${esc(r.name)}')">🗑</button>`;
+    const act=base+` <button class="btn ghost sm" title="Create a version tag to build installers" onclick="tagRelease('${esc(r.name)}')">🏷 Tag</button> ${relLink} ${delBtn}`;
     return `<tr>
       <td><a href="${esc(r.html_url)}" target="_blank"><b>${esc(r.name)}</b></a></td>
       <td>${badge}</td>
@@ -238,6 +299,26 @@ async function loadRepos(){
   el.innerHTML=`<table class="repos"><thead><tr>
       <th>Repository</th><th>Visibility</th><th>Uploaded</th><th>Last push</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table>`;
+}
+async function tagRelease(name){
+  const tag=(prompt('Version tag to release for '+name+'\n(creates the tag → builds Windows/Mac/Linux installers):','v1.0.0')||'').trim();
+  if(!tag)return;
+  log('→ tagging '+name+' '+tag+' …');
+  const r=await jpost('/api/tag_release',{name,tag});
+  if(r.ok){
+    log('🏷 tagged '+name+' '+r.tag+' — installers are building.');
+    log('   watch: '+r.actions);
+    log('   downloads will appear: '+r.releases);
+  } else log('tag: '+r.error);
+}
+async function deleteRepo(name){
+  const typed=(prompt('⚠️ PERMANENTLY delete the GitHub repo "'+name+'"?\n'
+    +'This cannot be undone and the link stops working for everyone.\n\n'
+    +'Type the repo name to confirm:','')||'').trim();
+  if(typed!==name){log('delete cancelled');return;}
+  const r=await jpost('/api/delete_repo',{name});
+  if(r.ok){log('🗑 deleted '+name);loadRepos();}
+  else log('delete: '+r.error);
 }
 async function makePublic(btn,name){
   btn.disabled=true;btn.textContent='…';

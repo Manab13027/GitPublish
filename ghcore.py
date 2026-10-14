@@ -11,16 +11,21 @@ Design goals:
 
 from __future__ import annotations
 
+import datetime
 import json
 import os
 import subprocess
 import urllib.request
 import urllib.error
 
+import readme_gen
+import license_gen
+
 API = "https://api.github.com"
 CONFIG_DIR = os.path.expanduser("~/.config/gitpublish")
 TOKEN_FILE = os.path.join(CONFIG_DIR, "token")
 IGNORE_FILE = os.path.join(CONFIG_DIR, "ignored.json")
+AUTHOR_FILE = os.path.join(CONFIG_DIR, "author")
 GH_MAX_BYTES = 95 * 1024 * 1024  # GitHub hard-rejects files >100MB; stay under
 
 DEFAULT_GITIGNORE = """\
@@ -194,6 +199,42 @@ def set_visibility(token: str, owner: str, name: str, private: bool) -> tuple[bo
     return code == 200, j
 
 
+def create_tag(token: str, owner: str, name: str, tag: str) -> dict:
+    """Create a version tag on the repo's default branch (triggers the
+    build-release workflow). Uses the user's PAT so the workflow actually runs."""
+    if not tag.strip():
+        return {"ok": False, "error": "empty tag"}
+    c, repo = api("GET", f"/repos/{owner}/{name}", token)
+    branch = repo.get("default_branch", "main") if c == 200 else "main"
+    c, ref = api("GET", f"/repos/{owner}/{name}/git/ref/heads/{branch}", token)
+    if c != 200:
+        return {"ok": False, "error": f"could not read branch '{branch}': {ref.get('message')}"}
+    sha = ref.get("object", {}).get("sha")
+    c, j = api("POST", f"/repos/{owner}/{name}/git/refs", token,
+               {"ref": f"refs/tags/{tag}", "sha": sha})
+    if c in (200, 201):
+        return {"ok": True, "tag": tag,
+                "actions": f"https://github.com/{owner}/{name}/actions",
+                "releases": f"https://github.com/{owner}/{name}/releases"}
+    if c == 422:
+        return {"ok": False, "error": f"tag '{tag}' already exists — use a new version"}
+    return {"ok": False, "error": str(j.get("message"))}
+
+
+def delete_repo(token: str, owner: str, name: str) -> dict:
+    """Permanently delete a repository. Requires the token to have the
+    'delete_repo' scope (the plain 'repo' scope does NOT include it)."""
+    code, j = api("DELETE", f"/repos/{owner}/{name}", token)
+    if code == 204:
+        return {"ok": True}
+    if code == 403:
+        return {"ok": False, "error": "token lacks the 'delete_repo' scope — "
+                "add it to your token at github.com/settings/tokens"}
+    if code == 404:
+        return {"ok": False, "error": "repo not found (already deleted?)"}
+    return {"ok": False, "error": str(j.get("message") or f"HTTP {code}")}
+
+
 def make_all_public(token: str) -> list[dict]:
     login = whoami(token)
     out = []
@@ -315,6 +356,145 @@ def publish_folder(token: str, folder: str, name: str | None = None,
             "excluded_large": big, "log": log}
 
 
+# -------------------------------------------------------------- author
+def get_author() -> str:
+    try:
+        return open(AUTHOR_FILE).read().strip()
+    except Exception:
+        return ""
+
+
+def save_author(name: str) -> str:
+    os.makedirs(CONFIG_DIR, exist_ok=True)
+    open(AUTHOR_FILE, "w").write(name.strip())
+    return name.strip()
+
+
+# -------------------------------------------------------------- readme / license / release
+def _has_file(folder: str, names: set[str]) -> bool:
+    try:
+        return any(f.lower() in names for f in os.listdir(folder))
+    except OSError:
+        return False
+
+
+def has_readme(folder: str) -> bool:
+    return _has_file(folder, {"readme.md", "readme", "readme.txt", "readme.rst", "readme.markdown"})
+
+
+def has_license(folder: str) -> bool:
+    return _has_file(folder, {"license", "license.md", "license.txt", "copying"})
+
+
+def gen_readme(folder: str, force: bool = False) -> dict:
+    folder = os.path.abspath(folder)
+    if has_readme(folder) and not force:
+        return {"ok": False, "error": "README already exists"}
+    info = readme_gen.detect(folder)
+    content = readme_gen.make_readme(os.path.basename(folder.rstrip("/")), folder, info)
+    open(os.path.join(folder, "README.md"), "w", encoding="utf-8").write(content)
+    return {"ok": True}
+
+
+def gen_license(folder: str, author: str, force: bool = False) -> dict:
+    folder = os.path.abspath(folder)
+    if not author:
+        return {"ok": False, "error": "set your name first"}
+    if has_license(folder) and not force:
+        return {"ok": False, "error": "LICENSE already exists"}
+    year = datetime.date.today().year
+    text = license_gen.APACHE.replace("{year}", str(year)).replace("{author}", author)
+    open(os.path.join(folder, "LICENSE"), "w", encoding="utf-8").write(text)
+    open(os.path.join(folder, "NOTICE"), "w", encoding="utf-8").write(
+        f"Copyright {year} {author}\n\nLicensed under the Apache License, Version 2.0.\n")
+    return {"ok": True}
+
+
+_RELEASE_WORKFLOW = """name: Build & Release
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            out: __APP__-linux
+          - os: macos-latest
+            out: __APP__-macos
+          - os: windows-latest
+            out: __APP__-windows.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Build
+        shell: bash
+        run: pyinstaller --onefile --name __APP__ __ENTRY__
+      - name: Name the artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv "dist/__APP__.exe" "dist/${{ matrix.out }}"
+          else
+            mv "dist/__APP__" "dist/${{ matrix.out }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
+"""
+
+
+def detect_entry(folder: str) -> str:
+    try:
+        names = os.listdir(folder)
+    except OSError:
+        return "app.py"
+    for c in ("app.py", "main.py", "run.py", "server.py", "manage.py", "cli.py"):
+        if c in names:
+            return c
+    py = sorted(n for n in names if n.endswith(".py"))
+    return py[0] if py else "app.py"
+
+
+def add_release_workflow(folder: str, app_name: str = "", entry: str = "") -> dict:
+    folder = os.path.abspath(folder)
+    app_name = app_name or os.path.basename(folder.rstrip("/"))
+    entry = entry or detect_entry(folder)
+    wfdir = os.path.join(folder, ".github", "workflows")
+    os.makedirs(wfdir, exist_ok=True)
+    content = _RELEASE_WORKFLOW.replace("__APP__", app_name).replace("__ENTRY__", entry)
+    open(os.path.join(wfdir, "build-release.yml"), "w", encoding="utf-8").write(content)
+    return {"ok": True, "app": app_name, "entry": entry}
+
+
 def scan_projects(root: str) -> list[dict]:
     """List immediate subfolders of `root` that look like projects."""
     root = os.path.abspath(os.path.expanduser(root))
@@ -367,5 +547,7 @@ def scan_projects(root: str) -> list[dict]:
         out.append({"name": entry, "path": p, "is_git": is_git, "has_remote": has_remote,
                     "dirty": dirty, "ahead": ahead, "published": published, "state": state,
                     "changed_at": changed_at, "changed_count": changed_count,
-                    "ignored": p in ignored_set, "kind": detect_kind(p)})
+                    "ignored": p in ignored_set, "kind": detect_kind(p),
+                    "has_readme": has_readme(p), "has_license": has_license(p),
+                    "has_release": os.path.isfile(os.path.join(p, ".github", "workflows", "build-release.yml"))})
     return out

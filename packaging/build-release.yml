@@ -1,0 +1,74 @@
+# GitHub Actions — build standalone binaries on Windows/macOS/Linux and attach
+# them to a GitHub Release. Drop this at .github/workflows/build-release.yml in
+# a repo (the add_release.sh helper fills __APP__/__ENTRY__ for you).
+#
+# How releases happen:  git tag v1.0.0 && git push --tags
+#   → Actions builds on all 3 OSes → binaries appear on the repo's Releases page.
+#
+# This targets a Python app frozen with PyInstaller. For Electron apps use
+# electron-builder instead (see RELEASES.md).
+
+name: Build & Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:          # lets you run it manually from the Actions tab
+
+permissions:
+  contents: write             # needed to create the Release
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            out: __APP__-linux
+          - os: macos-latest
+            out: __APP__-macos
+          - os: windows-latest
+            out: __APP__-windows.exe
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install dependencies
+        shell: bash
+        run: |
+          python -m pip install --upgrade pip pyinstaller
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+      - name: Build (PyInstaller, one file)
+        shell: bash
+        run: pyinstaller --onefile --name __APP__ __ENTRY__
+      - name: Name the artifact
+        shell: bash
+        run: |
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            mv "dist/__APP__.exe" "dist/${{ matrix.out }}"
+          else
+            mv "dist/__APP__" "dist/${{ matrix.out }}"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.out }}
+          path: dist/${{ matrix.out }}
+
+  release:
+    needs: build
+    runs-on: ubuntu-latest
+    if: startsWith(github.ref, 'refs/tags/')
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/**/*
+          generate_release_notes: true
