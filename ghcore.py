@@ -112,7 +112,8 @@ def list_repos(token: str, per_page: int = 100) -> list[dict]:
         if code != 200 or not j:
             break
         repos.extend({"name": r["name"], "full_name": r["full_name"], "private": r["private"],
-                      "html_url": r["html_url"], "pushed_at": r.get("pushed_at")} for r in j)
+                      "html_url": r["html_url"], "pushed_at": r.get("pushed_at"),
+                      "created_at": r.get("created_at"), "updated_at": r.get("updated_at")} for r in j)
         if len(j) < per_page:
             break
         page += 1
@@ -237,13 +238,19 @@ def publish_folder(token: str, folder: str, name: str | None = None,
         return {"ok": False, "error": "commit failed (no commit created): " + out, "html_url": html_url, "log": log}
     log.append("commit: " + (out.splitlines()[0] if out else "ok"))
 
-    # remote (clean URL, no token stored)
+    # remote: store a CLEAN url (no token) for the user's future git use
     _run(["git", "remote", "remove", "origin"], folder)
     _run(["git", "remote", "add", "origin", clone_url], folder)
 
-    # push with a one-shot auth header (token never written to .git/config)
-    header = f"Authorization: Bearer {token}"
-    code, out = _run(["git", "-c", f"http.extraheader={header}", "push", "-u", "origin", "main", "--force"], folder, token)
+    # push using a token-in-URL (the reliable way for GitHub over HTTPS).
+    # The tokenized URL is only a transient argument — never written to
+    # .git/config — and is masked in all logged output.
+    push_url = f"https://x-access-token:{token}@github.com/{login}/{name}.git"
+    code, out = _run(["git", "push", push_url, "main:main", "--force"], folder, token)
+    if code == 0:
+        # record the remote-tracking ref so change-detection works immediately
+        _run(["git", "update-ref", "refs/remotes/origin/main", "HEAD"], folder)
+        _run(["git", "branch", "--set-upstream-to=origin/main", "main"], folder)
     log.append("push: " + (out.splitlines()[-1] if out else "ok"))
     if code != 0:
         return {"ok": False, "error": "push failed: " + out, "html_url": html_url, "log": log}
@@ -263,9 +270,44 @@ def scan_projects(root: str) -> list[dict]:
         if not os.path.isdir(p) or entry.startswith("."):
             continue
         is_git = os.path.isdir(os.path.join(p, ".git"))
-        has_remote = False
+        has_remote = dirty = ahead = no_upstream = False
         if is_git:
-            code, out_r = _run(["git", "remote", "-v"], p)
-            has_remote = bool(out_r.strip())
-        out.append({"name": entry, "path": p, "is_git": is_git, "has_remote": has_remote})
+            _, rem = _run(["git", "remote", "-v"], p)
+            has_remote = bool(rem.strip())
+            _, st = _run(["git", "status", "--porcelain"], p)
+            dirty = bool(st.strip())                         # uncommitted changes
+            code, ab = _run(["git", "rev-list", "--count", "@{u}..HEAD"], p)
+            ahead = (code == 0 and ab.strip() not in ("", "0"))  # committed but not pushed
+        # "published" = a git repo with a remote, clean working tree, nothing unpushed
+        published = is_git and has_remote and not dirty and not ahead
+        changed_at = None       # epoch seconds of the most recent change
+        changed_count = 0
+        if dirty:
+            lines = [l for l in st.splitlines() if l.strip()]
+            changed_count = len(lines)
+            newest = 0.0
+            for l in lines:
+                parts = l.split(None, 1)                      # status, path (strip-safe)
+                rel = (parts[1] if len(parts) > 1 else "").strip().strip('"')
+                if " -> " in rel:                            # renamed: "old -> new"
+                    rel = rel.split(" -> ")[-1].strip().strip('"')
+                try:
+                    newest = max(newest, os.path.getmtime(os.path.join(p, rel)))
+                except OSError:
+                    pass
+            changed_at = newest or None
+        elif ahead:
+            c1, ts = _run(["git", "log", "-1", "--format=%ct"], p)   # last commit time
+            if c1 == 0 and ts.strip().isdigit():
+                changed_at = float(ts.strip())
+            changed_count = int(ab.strip()) if ab.strip().isdigit() else 0
+        if published:
+            state = "published"
+        elif is_git and (dirty or ahead):
+            state = "changed"
+        else:
+            state = "new"
+        out.append({"name": entry, "path": p, "is_git": is_git, "has_remote": has_remote,
+                    "dirty": dirty, "ahead": ahead, "published": published, "state": state,
+                    "changed_at": changed_at, "changed_count": changed_count})
     return out
