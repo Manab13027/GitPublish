@@ -80,6 +80,10 @@ class H(BaseHTTPRequestHandler):
             t = C.get_token(); login = C.whoami(t)
             ok, j = C.set_visibility(t, login, b["name"], False)
             self._json({"ok": ok, "error": None if ok else j.get("message")})
+        elif path == "/api/set_visibility":
+            t = C.get_token(); login = C.whoami(t)
+            ok, j = C.set_visibility(t, login, b["name"], bool(b.get("private")))
+            self._json({"ok": ok, "error": None if ok else j.get("message")})
         elif path == "/api/tag_release":
             t = C.get_token(); login = C.whoami(t)
             self._json(C.create_tag(t, login, b["name"], b.get("tag", "v1.0.0")))

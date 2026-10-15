@@ -123,7 +123,11 @@
   <!-- repos -->
   <div class="card hide" id="repoCard">
     <h2>Your GitHub repositories
-      <button class="btn warn sm" id="allPublic">Make ALL public</button>
+      <span class="toolbar" style="gap:8px">
+        <button class="btn ghost sm" onclick="bulkVisibility(true)">🔒 Selected → Private</button>
+        <button class="btn ghost sm" onclick="bulkVisibility(false)">🌐 Selected → Public</button>
+        <button class="btn warn sm" id="allPublic">Make ALL public</button>
+      </span>
     </h2>
     <div id="repos"><div class="muted">Loading…</div></div>
   </div>
@@ -285,20 +289,25 @@ async function loadRepos(){
   if(!d.repos.length){el.innerHTML='<div class="muted">No repositories yet.</div>';return;}
   const rows=d.repos.map(r=>{
     const badge=r.private?'<span class="badge b-priv">private</span>':'<span class="badge b-pub">public</span>';
-    const base=r.private?`<button class="btn warn sm" onclick="makePublic(this,'${esc(r.name)}')">Make public</button>`
-                        :`<a class="btn ghost sm" href="${esc(r.html_url)}" target="_blank">Open</a>`;
+    const visBtn=r.private
+      ? `<button class="btn warn sm" onclick="setVis(this,'${esc(r.name)}',false)">Make public</button>`
+      : `<button class="btn ghost sm" onclick="setVis(this,'${esc(r.name)}',true)">🔒 Make private</button>`;
+    const openLink=`<a class="btn ghost sm" href="${esc(r.html_url)}" target="_blank">Open</a>`;
     const relLink=`<a class="btn ghost sm" href="${esc(r.html_url)}/releases" target="_blank" title="View releases & downloads">Releases</a>`;
     const delBtn=`<button class="btn ghost sm" style="color:var(--red);border-color:var(--red)" title="Delete this repo permanently" onclick="deleteRepo('${esc(r.name)}')">🗑</button>`;
-    const act=base+` <button class="btn ghost sm" title="Create a version tag to build installers" onclick="tagRelease('${esc(r.name)}')">🏷 Tag</button> ${relLink} ${delBtn}`;
+    const act=`${openLink} ${visBtn} <button class="btn ghost sm" title="Create a version tag to build installers" onclick="tagRelease('${esc(r.name)}')">🏷 Tag</button> ${relLink} ${delBtn}`;
     return `<tr>
+      <td style="width:28px"><input type="checkbox" class="repochk" data-name="${esc(r.name)}"></td>
       <td><a href="${esc(r.html_url)}" target="_blank"><b>${esc(r.name)}</b></a></td>
       <td>${badge}</td>
       <td class="date">${fmtDate(r.created_at)||'—'}</td>
       <td class="date">${fmtDate(r.pushed_at)||'—'}</td>
       <td style="text-align:right">${act}</td></tr>`;}).join('');
   el.innerHTML=`<table class="repos"><thead><tr>
+      <th><input type="checkbox" id="repoAll" title="Select all"></th>
       <th>Repository</th><th>Visibility</th><th>Uploaded</th><th>Last push</th><th></th>
     </tr></thead><tbody>${rows}</tbody></table>`;
+  const all=$('#repoAll'); if(all)all.onchange=()=>document.querySelectorAll('.repochk').forEach(c=>c.checked=all.checked);
 }
 async function tagRelease(name){
   const tag=(prompt('Version tag to release for '+name+'\n(creates the tag → builds Windows/Mac/Linux installers):','v1.0.0')||'').trim();
@@ -319,6 +328,22 @@ async function deleteRepo(name){
   const r=await jpost('/api/delete_repo',{name});
   if(r.ok){log('🗑 deleted '+name);loadRepos();}
   else log('delete: '+r.error);
+}
+async function setVis(btn,name,priv){
+  btn.disabled=true;btn.textContent='…';
+  const r=await jpost('/api/set_visibility',{name,private:priv});
+  if(r.ok){log((priv?'🔒 ':'🌐 ')+name+' is now '+(priv?'private':'public'));loadRepos();}
+  else{log('visibility: '+r.error);btn.disabled=false;btn.textContent='Retry';}
+}
+function selectedRepos(){return [...document.querySelectorAll('.repochk:checked')].map(c=>c.dataset.name);}
+async function bulkVisibility(priv){
+  const names=selectedRepos();
+  if(!names.length){log('tick some repo checkboxes first');return;}
+  if(!confirm('Make '+names.length+' selected repo(s) '+(priv?'PRIVATE':'PUBLIC')+'?'))return;
+  log('→ setting '+names.length+' repo(s) to '+(priv?'private':'public')+'…');
+  for(const n of names){const r=await jpost('/api/set_visibility',{name:n,private:priv});
+    log((r.ok?(priv?'🔒 ':'🌐 '):'✗ ')+n+(r.ok?'':' — '+r.error));}
+  loadRepos();
 }
 async function makePublic(btn,name){
   btn.disabled=true;btn.textContent='…';
