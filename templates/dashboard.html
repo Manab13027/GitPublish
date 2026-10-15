@@ -56,6 +56,9 @@
   /* table */
   table.repos{width:100%;border-collapse:collapse}
   table.repos th{text-align:left;font-size:11px;letter-spacing:.5px;color:var(--dim);font-weight:600;padding:8px 10px;border-bottom:1px solid var(--line)}
+  table.repos th.sortable{cursor:pointer;user-select:none;white-space:nowrap}
+  table.repos th.sortable:hover{color:var(--ink)}
+  table.repos th .sarr{font-size:9px;margin-left:3px;color:var(--accent,#3fb950)}
   table.repos td{padding:9px 10px;border-bottom:1px solid var(--line);font-size:13px;vertical-align:middle}
   table.repos td.date{color:var(--dim);font-size:12px;white-space:nowrap}
   .bars2{display:flex;flex-direction:column;gap:7px;width:100%}
@@ -184,6 +187,7 @@ $('#connectBtn').onclick=async()=>{
 };
 
 let SHOW_PUBLISHED=false, SHOW_IGNORED=false, LAST_PROJECTS=[], LAST_REPOS=[];
+let REPO_SORT={key:'name', dir:1};   // dir: 1 = ascending, -1 = descending
 async function loadProjects(){
   const root=$('#rootInput').value.trim();
   const d=await jget('/api/projects?root='+encodeURIComponent(root));
@@ -290,11 +294,40 @@ async function publish(btn,path,name){
   else{log(`✗ ${name}: ${r.error}`);btn.disabled=false;btn.textContent='Retry';}
 }
 
+function sortRepos(key){
+  // click same column -> flip direction; new column -> ascending
+  if(REPO_SORT.key===key){REPO_SORT.dir*=-1;} else {REPO_SORT.key=key;REPO_SORT.dir=1;}
+  renderRepos();
+}
+function sortedRepos(){
+  const {key,dir}=REPO_SORT;
+  const val=r=>{
+    if(key==='name') return (r.name||'').toLowerCase();
+    if(key==='vis')  return r.private?1:0;                 // public first when ascending
+    if(key==='created') return Date.parse(r.created_at||0)||0;
+    if(key==='pushed')  return Date.parse(r.pushed_at||0)||0;
+    return 0;
+  };
+  return [...LAST_REPOS].sort((a,b)=>{
+    const x=val(a),y=val(b);
+    if(x<y)return -1*dir; if(x>y)return 1*dir;
+    // tie-break by name so order is stable
+    return (a.name||'').toLowerCase()<(b.name||'').toLowerCase()?-1:1;
+  });
+}
+function arrow(key){
+  if(REPO_SORT.key!==key) return '<span class="sarr" style="opacity:.25">↕</span>';
+  return '<span class="sarr">'+(REPO_SORT.dir===1?'▲':'▼')+'</span>';
+}
 async function loadRepos(){
-  const d=await jget('/api/repos');const el=$('#repos');
+  const d=await jget('/api/repos');
   LAST_REPOS=d.repos||[]; maybeAnalysis();
-  if(!d.repos.length){el.innerHTML='<div class="muted">No repositories yet.</div>';return;}
-  const rows=d.repos.map(r=>{
+  renderRepos();
+}
+function renderRepos(){
+  const el=$('#repos');
+  if(!LAST_REPOS.length){el.innerHTML='<div class="muted">No repositories yet.</div>';return;}
+  const rows=sortedRepos().map(r=>{
     const badge=r.private?'<span class="badge b-priv">private</span>':'<span class="badge b-pub">public</span>';
     const visBtn=r.private
       ? `<button class="btn warn sm" onclick="setVis(this,'${esc(r.name)}',false)">Make public</button>`
@@ -312,7 +345,11 @@ async function loadRepos(){
       <td style="text-align:right">${act}</td></tr>`;}).join('');
   el.innerHTML=`<table class="repos"><thead><tr>
       <th><input type="checkbox" id="repoAll" title="Select all"></th>
-      <th>Repository</th><th>Visibility</th><th>Uploaded</th><th>Last push</th><th></th>
+      <th class="sortable" onclick="sortRepos('name')" title="Sort by name">Repository ${arrow('name')}</th>
+      <th class="sortable" onclick="sortRepos('vis')" title="Sort by visibility">Visibility ${arrow('vis')}</th>
+      <th class="sortable" onclick="sortRepos('created')" title="Sort by upload date">Uploaded ${arrow('created')}</th>
+      <th class="sortable" onclick="sortRepos('pushed')" title="Sort by last push">Last push ${arrow('pushed')}</th>
+      <th></th>
     </tr></thead><tbody>${rows}</tbody></table>`;
   const all=$('#repoAll'); if(all)all.onchange=()=>document.querySelectorAll('.repochk').forEach(c=>c.checked=all.checked);
 }
