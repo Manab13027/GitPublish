@@ -81,10 +81,12 @@
 
   <!-- connect -->
   <div class="card" id="connectCard">
-    <h2>Connect your GitHub account</h2>
-    <p class="muted">Create a token at
-      <a href="https://github.com/settings/tokens/new?scopes=repo&description=GitPublish" target="_blank">github.com/settings/tokens</a>
-      — a classic token with the <b>repo</b> scope (or a fine-grained token with Repository: Administration + Contents = Read/write).
+    <h2 id="connectTitle">Connect your GitHub account</h2>
+    <p class="muted">Create (or edit) a token at
+      <a href="https://github.com/settings/tokens/new?scopes=repo,workflow,delete_repo&description=GitPublish" target="_blank">github.com/settings/tokens</a>
+      — a <b>classic</b> token with these scopes:
+      <b>repo</b> (publish &amp; change visibility), <b>workflow</b> (add the release build),
+      and <b>delete_repo</b> (the 🗑 button). Paste it below to connect or to replace an old token.
       It's stored only in <code>~/.config/gitpublish/token</code>.</p>
     <div style="display:flex;gap:10px">
       <input type="password" id="token" placeholder="ghp_… or github_pat_…">
@@ -146,7 +148,12 @@ async function refreshStatus(){
   const s=await jget('/api/status');
   USER=s.user;
   if(s.user){
-    $('#status').innerHTML=`connected as <b>${esc(s.user)}</b>`;
+    $('#status').innerHTML=`connected as <b>${esc(s.user)}</b> · <a href="#" id="changeTok">change token</a>`;
+    const ct=$('#changeTok'); if(ct) ct.onclick=(e)=>{e.preventDefault();
+      $('#connectCard').classList.remove('hide');
+      $('#connectTitle').textContent='Update your GitHub token';
+      $('#connectMsg').innerHTML='<span style="color:var(--yellow)">Paste your regenerated token and click Connect to replace the old one.</span>';
+      $('#token').value='';$('#token').focus();window.scrollTo(0,0);};
     $('#connectCard').classList.add('hide');
     $('#analysisCard').classList.remove('hide');
     $('#projCard').classList.remove('hide');$('#repoCard').classList.remove('hide');

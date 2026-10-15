@@ -350,7 +350,15 @@ def publish_folder(token: str, folder: str, name: str | None = None,
         _run(["git", "branch", "--set-upstream-to=origin/main", "main"], folder)
     log.append("push: " + (out.splitlines()[-1] if out else "ok"))
     if code != 0:
-        return {"ok": False, "error": "push failed: " + out, "html_url": html_url, "log": log}
+        err = out
+        if "workflow" in out and "scope" in out:
+            err = ("this repo has a GitHub Actions workflow (.github/workflows/), so your "
+                   "token needs the 'workflow' scope. Add it at github.com/settings/tokens "
+                   "(keep 'repo' ticked), then reconnect and push again.")
+        elif "Authentication" in out or "403" in out:
+            err = ("authentication failed — your token may lack the 'repo' scope or has "
+                   "expired. Recreate it at github.com/settings/tokens and reconnect.")
+        return {"ok": False, "error": err, "html_url": html_url, "log": log}
 
     return {"ok": True, "html_url": html_url, "name": name, "private": private,
             "excluded_large": big, "log": log}
