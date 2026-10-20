@@ -34,9 +34,10 @@ PY="$VENV/bin/python"
 export PIP_CONFIG_FILE=/dev/null
 unset PIP_EXTRA_INDEX_URL
 export PIP_INDEX_URL="https://pypi.org/simple"
-echo "==> Installing build deps (pyinstaller, pywebview)"
+echo "==> Installing build deps (pyinstaller)"
 "$PY" -m pip install --quiet --upgrade pip
-"$PY" -m pip install --quiet --upgrade pyinstaller pywebview
+"$PY" -m pip install --quiet --upgrade pyinstaller
+command -v swiftc >/dev/null || { echo "swiftc not found. Install Xcode or the CLT: xcode-select --install"; exit 1; }
 
 # ---- icon: packaging/AppIcon.png -> packaging/AppIcon.icns ------------------
 if [ -f packaging/AppIcon.png ] && { [ ! -f packaging/AppIcon.icns ] || [ packaging/AppIcon.png -nt packaging/AppIcon.icns ]; }; then
@@ -52,11 +53,43 @@ fi
 echo "==> Cleaning previous build"
 rm -rf build dist
 
-echo "==> Building with PyInstaller"
-"$PY" -m PyInstaller --noconfirm --distpath dist --workpath build packaging/GitPublish.spec
+echo "==> Building the local server (PyInstaller)"
+"$PY" -m PyInstaller --noconfirm --distpath build/server --workpath build/pyi packaging/GitPublish.spec
+[ -x build/server/gitpublish-server/gitpublish-server ] || { echo "Server build failed."; exit 1; }
 
+echo "==> Compiling the native app shell (Swift)"
+mkdir -p build/swift
+swiftc -O -o build/swift/GitPublish packaging/macos/main.swift -framework AppKit -framework WebKit
+
+echo "==> Assembling GitPublish.app"
 APP="dist/GitPublish.app"
-[ -d "$APP" ] || { echo "Build failed: $APP not produced."; exit 1; }
+mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
+cp build/swift/GitPublish "$APP/Contents/MacOS/GitPublish"
+cp -R build/server/gitpublish-server "$APP/Contents/Resources/server"
+[ -f packaging/AppIcon.icns ] && cp packaging/AppIcon.icns "$APP/Contents/Resources/AppIcon.icns"
+cat > "$APP/Contents/Info.plist" <<PLIST
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>CFBundleName</key><string>GitPublish</string>
+  <key>CFBundleDisplayName</key><string>GitPublish</string>
+  <key>CFBundleIdentifier</key><string>com.fighter.gitpublish</string>
+  <key>CFBundleExecutable</key><string>GitPublish</string>
+  <key>CFBundleIconFile</key><string>AppIcon</string>
+  <key>CFBundlePackageType</key><string>APPL</string>
+  <key>CFBundleShortVersionString</key><string>$VERSION</string>
+  <key>CFBundleVersion</key><string>$VERSION</string>
+  <key>CFBundleInfoDictionaryVersion</key><string>6.0</string>
+  <key>LSApplicationCategoryType</key><string>public.app-category.developer-tools</string>
+  <key>LSMinimumSystemVersion</key><string>11.0</string>
+  <key>NSHighResolutionCapable</key><true/>
+  <key>NSPrincipalClass</key><string>NSApplication</string>
+  <key>NSAppTransportSecurity</key>
+  <dict><key>NSAllowsLocalNetworking</key><true/></dict>
+</dict>
+</plist>
+PLIST
 echo "==> Built $APP"
 
 # ---- signing ---------------------------------------------------------------

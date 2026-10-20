@@ -163,6 +163,16 @@ if __name__ == "__main__":
 
     # serve in a background thread so we can self-test that it's really listening
     threading.Thread(target=httpd.serve_forever, daemon=True).start()
+
+    # when started by the GitPublish.app shell, exit if that app goes away
+    _parent = os.environ.get("GITPUBLISH_PARENT_PID")
+    if _parent:
+        def _watch_parent(pid=int(_parent)):
+            while True:
+                time.sleep(2)
+                if os.getppid() != pid:
+                    os._exit(0)
+        threading.Thread(target=_watch_parent, daemon=True).start()
     time.sleep(0.4)
     try:
         c = http.client.HTTPConnection("127.0.0.1", port, timeout=4)

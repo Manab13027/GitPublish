@@ -20,8 +20,12 @@ Result: `dist/GitPublish.app` and `dist/GitPublish-<VERSION>.dmg`. Or build and
 install to /Applications in one step with `./install.sh` (same as
 `INSTALL=1 bash packaging/build_app.sh`).
 
-- The app opens the dashboard in its **own window** (pywebview / WKWebView).
-  Closing the window or pressing Cmd+Q quits it.
+- The app is a small native Swift shell (`packaging/macos/main.swift`) that
+  starts the bundled Python server (`Contents/Resources/server`) and shows the
+  dashboard in a WebKit window. Closing the window or pressing Cmd+Q quits both.
+  Needs `swiftc` (Xcode or the command line tools) at build time.
+- Server output goes to `~/Library/Logs/GitPublish.log`. Right-click inside the
+  window → **Inspect Element** for the web inspector.
 - The icon comes from `packaging/AppIcon.png` (1024×1024). The script turns it
   into `AppIcon.icns`, so to change the icon just replace the PNG.
 - The version comes from the `VERSION` file. CI sets it from the git tag.

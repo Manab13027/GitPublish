@@ -14,6 +14,15 @@ from __future__ import annotations
 import os, sys, threading, time, webbrowser
 
 FROZEN = getattr(sys, "frozen", False)
+LOG = os.path.expanduser("~/Library/Logs/GitPublish.log")
+
+if FROZEN:  # no Terminal when launched from Finder: send output to a log file
+    try:
+        os.makedirs(os.path.dirname(LOG), exist_ok=True)
+        sys.stdout = sys.stderr = open(LOG, "a", buffering=1, encoding="utf-8")
+        print(f"\n=== GitPublish start {time.strftime('%Y-%m-%d %H:%M:%S')} ===")
+    except Exception:
+        pass
 
 
 def _fix_env_for_finder_launch() -> None:
@@ -57,9 +66,30 @@ def start_server() -> tuple[ThreadingHTTPServer, str]:
     raise SystemExit(f"[gitpublish] no free port in {want}..{want + 24}")
 
 
+def self_test(url: str) -> str | None:
+    """GET / from our own server. Returns an error string, or None if OK."""
+    import http.client
+    from urllib.parse import urlparse
+    u = urlparse(url)
+    for _ in range(20):
+        try:
+            c = http.client.HTTPConnection(u.hostname, u.port, timeout=3)
+            c.request("GET", "/"); r = c.getresponse(); body = r.read(); c.close()
+            if r.status == 200 and b"<html" in body[:400].lower():
+                return None
+            return f"server answered HTTP {r.status}: {body[:300]!r}"
+        except Exception as e:
+            err = f"{type(e).__name__}: {e}"
+            time.sleep(0.15)
+    return err
+
+
 def _alert(msg: str) -> None:
     if sys.platform == "darwin":
-        os.system("osascript -e " + repr(f'display alert "GitPublish" message "{msg}"') + " >/dev/null 2>&1")
+        import subprocess
+        safe = msg.replace("\\", "/").replace('"', "'")
+        subprocess.run(["osascript", "-e", f'display alert "GitPublish" message "{safe}"'],
+                       capture_output=True)
     print(msg)
 
 
@@ -68,7 +98,11 @@ def main() -> None:
         _alert("git was not found. Install Apple's command line tools (xcode-select --install) and relaunch.")
 
     httpd, url = start_server()
-    time.sleep(0.2)
+    print(f"[gitpublish] server {url}  templates={server.BASE}")
+    err = self_test(url)
+    if err:
+        _alert(f"GitPublish's local server failed: {err}  (details: {LOG})")
+        raise SystemExit(1)
 
     try:
         import webview  # pywebview
@@ -78,9 +112,10 @@ def main() -> None:
     if webview is not None and os.environ.get("GITPUBLISH_BROWSER") != "1":
         storage = os.path.expanduser("~/.config/gitpublish/webview")
         os.makedirs(storage, exist_ok=True)
+        debug = os.environ.get("GITPUBLISH_DEBUG") == "1"   # right-click -> Inspect Element
         webview.create_window("GitPublish", url, width=1200, height=820,
                               min_size=(900, 600), text_select=True)
-        webview.start(private_mode=False, storage_path=storage)  # blocks until window closes
+        webview.start(private_mode=False, storage_path=storage, debug=debug)  # blocks until closed
         httpd.shutdown()
         return
 
