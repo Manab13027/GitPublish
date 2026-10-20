@@ -26,3 +26,7 @@ build/
 *.key
 token
 .gitpublish_token
+
+# app build
+.build-venv/
+packaging/AppIcon.icns

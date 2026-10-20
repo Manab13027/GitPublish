@@ -17,7 +17,26 @@ flip private → public.)
 
 Copy the token (starts with `ghp_` or `github_pat_`).
 
-## 2A. Use the dashboard (recommended)
+## 2A. Install it as a Mac app (recommended)
+
+```bash
+cd GitPublish
+./install.sh
+```
+
+This builds a standalone **GitPublish.app** (bundles its own Python, with a
+native window and Dock icon, and Cmd+Q quits it), installs it to
+**/Applications**, and launches it. After that, open it from Launchpad or
+Spotlight like any other app. Re-run `./install.sh` after changing the code.
+
+To share it, run `bash packaging/build_app.sh` and send
+`dist/GitPublish-<version>.dmg`. The recipient opens the .dmg and drags
+GitPublish into Applications. The first time, they right-click the app,
+choose **Open**, then **Open** again. Tagging `vX.Y.Z` also builds the .dmg on
+GitHub Releases. Signing and notarizing are covered in
+[packaging/BUILD.md](packaging/BUILD.md).
+
+## 2B. Or run the dashboard from source
 
 ```bash
 cd GitPublish
@@ -31,7 +50,7 @@ cd GitPublish
 - **Your GitHub repositories** lists all your repos with their visibility.
   Click **Make public** on any private one, or **Make ALL public** at the top.
 
-## 2B. Or use the CLI
+## 2C. Or use the CLI
 
 ```bash
 cd GitPublish
@@ -72,5 +91,9 @@ app.py                  local web server (stdlib http.server)
 ghcore.py               GitHub API (urllib) + git ops + scanning
 ghpublish.py            command-line interface
 templates/dashboard.html the dashboard UI
-run.sh                  launcher
+desktop.py              desktop-app entry (native window, falls back to browser)
+run.sh                  launcher (browser, runs from source)
+install.sh              build + install GitPublish.app into /Applications
+packaging/              build_app.sh, PyInstaller spec, icon, entitlements
+VERSION                 app version shown in Finder / About
 ```

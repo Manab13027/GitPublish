@@ -1,101 +1,106 @@
 #!/bin/bash
 # =============================================================================
-# GitPublish — build a standalone, signed, notarized macOS .app
+# GitPublish — build a standalone macOS app (+ .dmg installer)
 # Run this ON A MAC (it cannot be cross-built from Linux/Windows).
 #
-#   bash packaging/build_app.sh
+#   bash packaging/build_app.sh            # build dist/GitPublish.app + .dmg
+#   INSTALL=1 bash packaging/build_app.sh  # ...and copy it into /Applications
 #
-# Produces: dist/GitPublish.app  (self-contained — bundles Python, no install)
+# The app is self-contained (bundles Python + a native window), opens the
+# dashboard in its own window, shows in the Dock/Launchpad, and quits with Cmd+Q.
 #
 # Signing + notarization are OPTIONAL (only needed to remove the Gatekeeper
-# warning on OTHER people's Macs). Leave the variables blank for a normal
-# unsigned app + .dmg installer — exactly how an app like Sentinel works.
-# It's ad-hoc signed and packaged into dist/GitPublish.dmg automatically.
+# warning on OTHER people's Macs). Leave DEV_ID blank for an ad-hoc-signed app.
 # =============================================================================
 set -e
 cd "$(dirname "$0")/.."            # repo root (folder with app.py)
 ROOT="$(pwd)"
+VERSION="$(cat VERSION 2>/dev/null || echo 1.0.0)"
 
-# ---- fill these for a SIGNED + NOTARIZED build (else leave blank) -----------
-DEV_ID="${DEV_ID:-}"               # e.g. "Developer ID Application: Your Name (TEAMID)"
-NOTARY_PROFILE="${NOTARY_PROFILE:-}"  # a keychain profile name you created (see BUILD.md)
-# -----------------------------------------------------------------------------
+DEV_ID="${DEV_ID:-}"                  # e.g. "Developer ID Application: Your Name (TEAMID)"
+NOTARY_PROFILE="${NOTARY_PROFILE:-}"  # keychain profile name (see BUILD.md)
 
-echo "==> Checking tools"
+echo "==> GitPublish $VERSION"
+[ "$(uname)" = "Darwin" ] || { echo "This script must run on macOS."; exit 1; }
 command -v python3 >/dev/null || { echo "python3 not found. Install Xcode CLT: xcode-select --install"; exit 1; }
 command -v git >/dev/null || { echo "git not found (xcode-select --install)"; exit 1; }
 
-# Build inside a private virtual environment — avoids the macOS
-# 'externally-managed-environment' (PEP 668) error and keeps system Python clean.
+# ---- private build venv (avoids PEP 668 'externally-managed-environment') ----
 VENV="$ROOT/.build-venv"
 PY="$VENV/bin/python"
-if [ ! -x "$PY" ]; then
-  echo "==> Creating build virtual environment (.build-venv)"
-  python3 -m venv "$VENV"
+[ -x "$PY" ] || { echo "==> Creating build venv (.build-venv)"; python3 -m venv "$VENV"; }
+# Ignore any personal pip config (e.g. an extra index like pypi.ngc.nvidia.com
+# that isn't reachable) and always install from the official PyPI.
+export PIP_CONFIG_FILE=/dev/null
+unset PIP_EXTRA_INDEX_URL
+export PIP_INDEX_URL="https://pypi.org/simple"
+echo "==> Installing build deps (pyinstaller, pywebview)"
+"$PY" -m pip install --quiet --upgrade pip
+"$PY" -m pip install --quiet --upgrade pyinstaller pywebview
+
+# ---- icon: packaging/AppIcon.png -> packaging/AppIcon.icns ------------------
+if [ -f packaging/AppIcon.png ] && { [ ! -f packaging/AppIcon.icns ] || [ packaging/AppIcon.png -nt packaging/AppIcon.icns ]; }; then
+  echo "==> Building AppIcon.icns"
+  SET="$(mktemp -d)/AppIcon.iconset"; mkdir -p "$SET"
+  for s in 16 32 128 256 512; do
+    sips -z $s $s           packaging/AppIcon.png --out "$SET/icon_${s}x${s}.png"    >/dev/null
+    sips -z $((s*2)) $((s*2)) packaging/AppIcon.png --out "$SET/icon_${s}x${s}@2x.png" >/dev/null
+  done
+  iconutil -c icns "$SET" -o packaging/AppIcon.icns
 fi
-echo "==> Installing PyInstaller into the venv"
-"$PY" -m pip install --upgrade pip >/dev/null
-"$PY" -m pip install --upgrade pyinstaller >/dev/null
 
 echo "==> Cleaning previous build"
-rm -rf build dist GitPublish.spec
+rm -rf build dist
 
 echo "==> Building with PyInstaller"
-"$PY" -m PyInstaller \
-  --name GitPublish \
-  --windowed \
-  --noconfirm \
-  --add-data "templates:templates" \
-  ${ICON:+--icon "$ICON"} \
-  app.py
+"$PY" -m PyInstaller --noconfirm --distpath dist --workpath build packaging/GitPublish.spec
 
 APP="dist/GitPublish.app"
 [ -d "$APP" ] || { echo "Build failed: $APP not produced."; exit 1; }
 echo "==> Built $APP"
 
+# ---- signing ---------------------------------------------------------------
 if [ -n "$DEV_ID" ]; then
   echo "==> Code-signing (hardened runtime)"
   codesign --deep --force --timestamp --options runtime \
-    --entitlements packaging/entitlements.plist \
-    --sign "$DEV_ID" "$APP"
+    --entitlements packaging/entitlements.plist --sign "$DEV_ID" "$APP"
   codesign --verify --strict --verbose=2 "$APP"
-  echo "==> Signed."
-
   if [ -n "$NOTARY_PROFILE" ]; then
-    echo "==> Notarizing (this uploads to Apple and waits)"
+    echo "==> Notarizing (uploads to Apple and waits)"
     ZIP="dist/GitPublish.zip"
     /usr/bin/ditto -c -k --keepParent "$APP" "$ZIP"
     xcrun notarytool submit "$ZIP" --keychain-profile "$NOTARY_PROFILE" --wait
-    echo "==> Stapling the notarization ticket"
-    xcrun stapler staple "$APP"
-    xcrun stapler validate "$APP"
+    xcrun stapler staple "$APP" && xcrun stapler validate "$APP"
     rm -f "$ZIP"
-    echo "==> Notarized + stapled. No Gatekeeper warning on any Mac."
-  else
-    echo "==> Signed but NOT notarized (set NOTARY_PROFILE to notarize)."
   fi
 else
-  # No paid Apple account needed — ad-hoc sign so it runs cleanly (exactly how
-  # an unsigned app like Sentinel works). First open on another Mac may need
-  # right-click → Open once; on this Mac it just runs.
   echo "==> Ad-hoc signing (no Apple account needed)"
   codesign --force --deep --sign - "$APP" 2>/dev/null || true
 fi
 
-# ---- package as a .dmg installer (like Sentinel), no account needed ---------
+# ---- .dmg installer (drag to Applications) ---------------------------------
 if [ "${MAKE_DMG:-1}" = "1" ]; then
-  echo "==> Building disk image (GitPublish.dmg)"
+  DMG="dist/GitPublish-$VERSION.dmg"
+  echo "==> Building $DMG"
   STAGE="$(mktemp -d)"
   cp -R "$APP" "$STAGE/"
   ln -s /Applications "$STAGE/Applications"
-  rm -f "dist/GitPublish.dmg"
-  hdiutil create -volname "GitPublish" -srcfolder "$STAGE" -ov -format UDZO "dist/GitPublish.dmg" >/dev/null
+  hdiutil create -volname "GitPublish $VERSION" -srcfolder "$STAGE" -ov -format UDZO "$DMG" >/dev/null
   rm -rf "$STAGE"
-  echo "==> dist/GitPublish.dmg ready — double-click it, then drag GitPublish into Applications."
+  [ -n "$DEV_ID" ] && codesign --force --sign "$DEV_ID" "$DMG" || true
+fi
+
+# ---- optional: install into /Applications ----------------------------------
+if [ "${INSTALL:-0}" = "1" ]; then
+  echo "==> Installing to /Applications"
+  osascript -e 'quit app "GitPublish"' >/dev/null 2>&1 || true
+  rm -rf "/Applications/GitPublish.app"
+  cp -R "$APP" /Applications/
+  xattr -dr com.apple.quarantine /Applications/GitPublish.app 2>/dev/null || true
+  echo "    Installed: /Applications/GitPublish.app (Launchpad / Spotlight: 'GitPublish')"
 fi
 
 echo ""
 echo "Done:"
-echo "  app  -> $ROOT/$APP"
-[ -f "dist/GitPublish.dmg" ] && echo "  dmg  -> $ROOT/dist/GitPublish.dmg  (installer — share or keep this)"
-echo "Drag the app to /Applications, or open the .dmg and drag it in."
+echo "  app -> $ROOT/$APP"
+ls dist/*.dmg >/dev/null 2>&1 && echo "  dmg -> $ROOT/$(ls dist/*.dmg | head -1)  (open it, drag GitPublish into Applications)"

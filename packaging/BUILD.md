@@ -16,13 +16,15 @@ cd ~/Documents/Projects_Folder/GitPublish
 bash packaging/build_app.sh
 ```
 
-Result: `dist/GitPublish.app`. Drag it to **/Applications**. First open on your
-own Mac: right-click → **Open** → **Open** (once). Good enough if it's just for you.
+Result: `dist/GitPublish.app` and `dist/GitPublish-<VERSION>.dmg`. Or build and
+install to /Applications in one step with `./install.sh` (same as
+`INSTALL=1 bash packaging/build_app.sh`).
 
-To give it a custom icon, pass an `.icns`:
-```bash
-ICON=packaging/AppIcon.icns bash packaging/build_app.sh
-```
+- The app opens the dashboard in its **own window** (pywebview / WKWebView).
+  Closing the window or pressing Cmd+Q quits it.
+- The icon comes from `packaging/AppIcon.png` (1024×1024). The script turns it
+  into `AppIcon.icns`, so to change the icon just replace the PNG.
+- The version comes from the `VERSION` file. CI sets it from the git tag.
 
 ---
 
